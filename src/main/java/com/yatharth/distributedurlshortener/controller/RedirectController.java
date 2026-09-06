@@ -23,11 +23,11 @@ public class RedirectController {
     public ResponseEntity<Void> redirect(
             @PathVariable String shortCode) {
 
-        Url url = urlService.getUrlByShortCode(shortCode);
+        String originalUrl = urlService.getOriginalUrlByShortCode(shortCode);
 
         return ResponseEntity
                 .status(HttpStatus.FOUND)
-                .location(URI.create(url.getOriginalUrl()))
+                .location(URI.create(originalUrl))
                 .build();
     }
 }
