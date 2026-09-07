@@ -1,7 +1,9 @@
 package com.yatharth.distributedurlshortener.service;
 
 import com.yatharth.distributedurlshortener.entity.Url;
+import com.yatharth.distributedurlshortener.event.UrlCreatedEvent;
 import com.yatharth.distributedurlshortener.exception.UrlNotFoundException;
+import com.yatharth.distributedurlshortener.producer.UrlEventProducer;
 import com.yatharth.distributedurlshortener.repository.UrlRepository;
 import com.yatharth.distributedurlshortener.util.Base62Encoder;
 import com.yatharth.distributedurlshortener.util.SnowflakeIdGenerator;
@@ -15,14 +17,18 @@ public class UrlService {
 
     private final UrlRepository urlRepository;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
+    private final UrlEventProducer urlEventProducer;
     private static final Logger logger =
             LoggerFactory.getLogger(UrlService.class);
 
     public UrlService(
             UrlRepository urlRepository,
-            SnowflakeIdGenerator snowflakeIdGenerator) {
+            SnowflakeIdGenerator snowflakeIdGenerator,
+            UrlEventProducer urlEventProducer) {
+
         this.urlRepository = urlRepository;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
+        this.urlEventProducer = urlEventProducer;
     }
 
     public Url createShortUrl(String originalUrl) {
@@ -36,7 +42,19 @@ public class UrlService {
         url.setOriginalUrl(originalUrl);
         url.setShortCode(shortCode);
 
-        return urlRepository.save(url);
+        Url savedUrl = urlRepository.save(url);
+
+        UrlCreatedEvent event = new UrlCreatedEvent(
+                savedUrl.getId(),
+                savedUrl.getShortCode(),
+                savedUrl.getOriginalUrl(),
+                savedUrl.getCreatedAt()
+                        .toInstant(java.time.ZoneOffset.UTC)
+        );
+
+        urlEventProducer.publishUrlCreated(event);
+
+        return savedUrl;
     }
 
     @Cacheable(value = "urls", key = "#shortCode")
