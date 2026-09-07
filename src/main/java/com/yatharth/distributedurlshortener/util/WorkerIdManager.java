@@ -66,6 +66,14 @@ public class WorkerIdManager {
         );
     }
 
+    private static final String RENEW_LEASE_SCRIPT = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('EXPIRE', KEYS[1], ARGV[2])
+        else
+            return 0
+        end
+        """;
+
     @Scheduled(fixedRate = RENEWAL_INTERVAL_MS)
     public void renewLease() {
 
@@ -75,16 +83,17 @@ public class WorkerIdManager {
 
         String key = "snowflake:worker:" + workerId;
 
-        String currentOwner = redisTemplate
-                .opsForValue()
-                .get(key);
+        Long result = redisTemplate.execute(
+                new DefaultRedisScript<>(
+                        RENEW_LEASE_SCRIPT,
+                        Long.class
+                ),
+                List.of(key),
+                instanceId,
+                String.valueOf(LEASE_DURATION.getSeconds())
+        );
 
-        if (instanceId.equals(currentOwner)) {
-
-            redisTemplate.expire(
-                    key,
-                    LEASE_DURATION
-            );
+        if (Long.valueOf(1).equals(result)) {
 
             logger.debug(
                     "Renewed worker ID lease: {}",
