@@ -1,26 +1,26 @@
 package com.yatharth.distributedurlshortener.producer;
 
-import com.yatharth.distributedurlshortener.event.UrlCreatedEvent;
+import com.yatharth.distributedurlshortener.event.UrlClickedEvent;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 @Component
-public class UrlEventProducer {
+public class UrlClickEventProducer {
 
-    private static final String URL_EVENTS_TOPIC =
-            "url-events";
+    private static final String URL_CLICK_EVENTS_TOPIC =
+            "url-click-events";
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
 
-    public UrlEventProducer(
+    public UrlClickEventProducer(
             KafkaTemplate<String, Object> kafkaTemplate) {
         this.kafkaTemplate = kafkaTemplate;
     }
 
-    public void publishUrlCreated(UrlCreatedEvent event) {
+    public void publishUrlClicked(UrlClickedEvent event) {
 
         kafkaTemplate.send(
-                URL_EVENTS_TOPIC,
+                URL_CLICK_EVENTS_TOPIC,
                 event.shortCode(),
                 event
         );

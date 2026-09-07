@@ -1,5 +1,6 @@
 package com.yatharth.distributedurlshortener.config;
 
+import com.yatharth.distributedurlshortener.event.UrlClickedEvent;
 import com.yatharth.distributedurlshortener.event.UrlCreatedEvent;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -56,6 +57,45 @@ public class KafkaConsumerConfig {
         );
     }
 
+    @Bean
+    public ConsumerFactory<String, UrlClickedEvent> clickEventConsumerFactory() {
+
+        JsonDeserializer<UrlClickedEvent> deserializer =
+                new JsonDeserializer<>(UrlClickedEvent.class);
+
+        deserializer.addTrustedPackages(
+                "com.yatharth.distributedurlshortener.event"
+        );
+
+        Map<String, Object> properties = new HashMap<>();
+
+        properties.put(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
+                "localhost:9092"
+        );
+
+        properties.put(
+                ConsumerConfig.GROUP_ID_CONFIG,
+                "url-click-analytics-group"
+        );
+
+        properties.put(
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
+                "earliest"
+        );
+
+        properties.put(
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+                StringDeserializer.class
+        );
+
+        return new DefaultKafkaConsumerFactory<>(
+                properties,
+                new StringDeserializer(),
+                deserializer
+        );
+    }
+
     @Bean(name = "kafkaListenerContainerFactory")
     public ConcurrentKafkaListenerContainerFactory<String, UrlCreatedEvent>
     kafkaListenerContainerFactory(
@@ -66,6 +106,22 @@ public class KafkaConsumerConfig {
                 factory = new ConcurrentKafkaListenerContainerFactory<>();
 
         factory.setConsumerFactory(consumerFactory);
+
+        factory.setCommonErrorHandler(kafkaErrorHandler);
+
+        return factory;
+    }
+
+    @Bean(name = "clickEventKafkaListenerContainerFactory")
+    public ConcurrentKafkaListenerContainerFactory<String, UrlClickedEvent>
+    clickEventKafkaListenerContainerFactory(
+            ConsumerFactory<String, UrlClickedEvent> clickEventConsumerFactory,
+            DefaultErrorHandler kafkaErrorHandler) {
+
+        ConcurrentKafkaListenerContainerFactory<String, UrlClickedEvent>
+                factory = new ConcurrentKafkaListenerContainerFactory<>();
+
+        factory.setConsumerFactory(clickEventConsumerFactory);
 
         factory.setCommonErrorHandler(kafkaErrorHandler);
 

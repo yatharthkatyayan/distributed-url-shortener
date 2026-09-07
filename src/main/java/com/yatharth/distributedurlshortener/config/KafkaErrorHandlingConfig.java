@@ -1,6 +1,5 @@
 package com.yatharth.distributedurlshortener.config;
 
-import com.yatharth.distributedurlshortener.event.UrlCreatedEvent;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -16,7 +15,7 @@ public class KafkaErrorHandlingConfig {
 
     @Bean
     public DeadLetterPublishingRecoverer deadLetterPublishingRecoverer(
-            KafkaTemplate<String, UrlCreatedEvent> kafkaTemplate) {
+            KafkaTemplate<String, Object> kafkaTemplate) {
 
         return new DeadLetterPublishingRecoverer(
                 kafkaTemplate,
@@ -47,6 +46,15 @@ public class KafkaErrorHandlingConfig {
     public NewTopic urlEventsDlt() {
         return new NewTopic(
                 "url-events.DLT",
+                1,
+                (short) 1
+        );
+    }
+
+    @Bean
+    public NewTopic urlClickEventsTopic() {
+        return new NewTopic(
+                "url-click-events",
                 1,
                 (short) 1
         );

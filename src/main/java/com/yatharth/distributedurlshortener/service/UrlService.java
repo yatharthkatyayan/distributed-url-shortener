@@ -1,8 +1,10 @@
 package com.yatharth.distributedurlshortener.service;
 
+import com.yatharth.distributedurlshortener.dto.UrlRedirectData;
 import com.yatharth.distributedurlshortener.entity.Url;
 import com.yatharth.distributedurlshortener.event.UrlCreatedEvent;
 import com.yatharth.distributedurlshortener.exception.UrlNotFoundException;
+import com.yatharth.distributedurlshortener.producer.UrlClickEventProducer;
 import com.yatharth.distributedurlshortener.producer.UrlEventProducer;
 import com.yatharth.distributedurlshortener.repository.UrlRepository;
 import com.yatharth.distributedurlshortener.util.Base62Encoder;
@@ -20,17 +22,19 @@ public class UrlService {
     private final UrlEventProducer urlEventProducer;
     private static final Logger logger =
             LoggerFactory.getLogger(UrlService.class);
+    private final UrlClickEventProducer urlClickEventProducer;
 
     public UrlService(
             UrlRepository urlRepository,
             SnowflakeIdGenerator snowflakeIdGenerator,
-            UrlEventProducer urlEventProducer) {
+            UrlEventProducer urlEventProducer,
+            UrlClickEventProducer urlClickEventProducer) {
 
         this.urlRepository = urlRepository;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.urlEventProducer = urlEventProducer;
+        this.urlClickEventProducer = urlClickEventProducer;
     }
-
     public Url createShortUrl(String originalUrl) {
 
         long id = snowflakeIdGenerator.generateId();
@@ -58,13 +62,19 @@ public class UrlService {
     }
 
     @Cacheable(value = "urls", key = "#shortCode")
-    public String getOriginalUrlByShortCode(String shortCode) {
+    public UrlRedirectData getUrlForRedirect(String shortCode) {
+
         logger.info(
                 "Cache MISS - querying PostgreSQL for shortCode={}",
                 shortCode
         );
+
         return urlRepository.findByShortCode(shortCode)
-                .map(Url::getOriginalUrl)
+                .map(url -> new UrlRedirectData(
+                        url.getId(),
+                        url.getShortCode(),
+                        url.getOriginalUrl()
+                ))
                 .orElseThrow(() -> new UrlNotFoundException(
                         "URL not found for short code: " + shortCode
                 ));

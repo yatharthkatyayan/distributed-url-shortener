@@ -1,6 +1,5 @@
 package com.yatharth.distributedurlshortener.config;
 
-import com.yatharth.distributedurlshortener.event.UrlCreatedEvent;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.context.annotation.Bean;
@@ -17,7 +16,7 @@ import java.util.Map;
 public class KafkaConfig {
 
     @Bean
-    public ProducerFactory<String, UrlCreatedEvent>
+    public ProducerFactory<String, Object>
     producerFactory() {
 
         Map<String, Object> config = new HashMap<>();
@@ -41,9 +40,8 @@ public class KafkaConfig {
     }
 
     @Bean
-    public KafkaTemplate<String, UrlCreatedEvent>
-    kafkaTemplate() {
-
-        return new KafkaTemplate<>(producerFactory());
+    public KafkaTemplate<String, Object> kafkaTemplate(
+            ProducerFactory<String, Object> producerFactory) {
+        return new KafkaTemplate<>(producerFactory);
     }
 }
