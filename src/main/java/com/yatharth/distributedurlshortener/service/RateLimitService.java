@@ -1,5 +1,6 @@
 package com.yatharth.distributedurlshortener.service;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
@@ -10,8 +11,11 @@ import java.util.List;
 @Service
 public class RateLimitService {
 
-    private static final int MAX_REQUESTS = 10;
-    private static final Duration WINDOW = Duration.ofMinutes(1);
+    @Value("${app.rate-limit.max-requests:10}")
+    private int maxRequests;
+
+    @Value("${app.rate-limit.window-minutes:1}")
+    private int windowMinutes;
 
     private final StringRedisTemplate redisTemplate;
 
@@ -42,9 +46,9 @@ public class RateLimitService {
         Long count = redisTemplate.execute(
                 rateLimitScript,
                 List.of(key),
-                String.valueOf(WINDOW.getSeconds())
+                String.valueOf(Duration.ofMinutes(windowMinutes).getSeconds())
         );
 
-        return count != null && count <= MAX_REQUESTS;
+        return count != null && count <= maxRequests;
     }
 }

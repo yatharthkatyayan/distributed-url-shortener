@@ -9,6 +9,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Component
 public class UrlClickedEventConsumer {
@@ -31,7 +32,16 @@ public class UrlClickedEventConsumer {
     )
     public void consume(UrlClickedEvent event) {
 
+        if (analyticsRepository.existsByEventId(event.eventId())) {
+            log.info(
+                    "Duplicate click event ignored: eventId={}",
+                    event.eventId()
+            );
+            return;
+        }
+
         UrlClickAnalytics analytics = new UrlClickAnalytics(
+                event.eventId(),
                 event.urlId(),
                 event.shortCode(),
                 event.clickedAt(),

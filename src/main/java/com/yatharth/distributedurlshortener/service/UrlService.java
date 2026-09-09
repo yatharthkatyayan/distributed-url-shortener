@@ -9,6 +9,7 @@ import com.yatharth.distributedurlshortener.producer.UrlEventProducer;
 import com.yatharth.distributedurlshortener.repository.UrlRepository;
 import com.yatharth.distributedurlshortener.util.Base62Encoder;
 import com.yatharth.distributedurlshortener.util.SnowflakeIdGenerator;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
@@ -23,17 +24,20 @@ public class UrlService {
     private static final Logger logger =
             LoggerFactory.getLogger(UrlService.class);
     private final UrlClickEventProducer urlClickEventProducer;
+    private final MeterRegistry meterRegistry;
 
     public UrlService(
             UrlRepository urlRepository,
             SnowflakeIdGenerator snowflakeIdGenerator,
             UrlEventProducer urlEventProducer,
-            UrlClickEventProducer urlClickEventProducer) {
+            UrlClickEventProducer urlClickEventProducer,
+            MeterRegistry meterRegistry) {
 
         this.urlRepository = urlRepository;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.urlEventProducer = urlEventProducer;
         this.urlClickEventProducer = urlClickEventProducer;
+        this.meterRegistry = meterRegistry;
     }
     public Url createShortUrl(String originalUrl) {
 
@@ -47,6 +51,10 @@ public class UrlService {
         url.setShortCode(shortCode);
 
         Url savedUrl = urlRepository.save(url);
+
+        meterRegistry
+                .counter("url.creation.total")
+                .increment();
 
         UrlCreatedEvent event = new UrlCreatedEvent(
                 savedUrl.getId(),

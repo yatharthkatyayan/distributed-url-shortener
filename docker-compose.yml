@@ -58,6 +58,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: postgres
       SPRING_DATA_REDIS_HOST: redis
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      APP_RATE_LIMIT_MAX_REQUESTS: 100000
     expose:
       - "8080"
     depends_on:

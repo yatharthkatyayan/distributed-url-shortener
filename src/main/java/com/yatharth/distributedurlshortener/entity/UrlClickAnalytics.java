@@ -1,12 +1,9 @@
 package com.yatharth.distributedurlshortener.entity;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "url_click_analytics")
@@ -15,6 +12,8 @@ public class UrlClickAnalytics {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    private UUID eventId;
 
     private Long urlId;
 
@@ -28,11 +27,13 @@ public class UrlClickAnalytics {
     }
 
     public UrlClickAnalytics(
+            UUID eventId,
             Long urlId,
             String shortCode,
             Instant clickedAt,
             Instant processedAt) {
 
+        this.eventId = eventId;
         this.urlId = urlId;
         this.shortCode = shortCode;
         this.clickedAt = clickedAt;
@@ -41,6 +42,10 @@ public class UrlClickAnalytics {
 
     public Long getId() {
         return id;
+    }
+
+    public UUID getEventId() {
+        return eventId;
     }
 
     public Long getUrlId() {
