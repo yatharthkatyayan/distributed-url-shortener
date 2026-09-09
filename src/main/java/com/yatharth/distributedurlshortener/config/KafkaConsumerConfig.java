@@ -125,6 +125,8 @@ public class KafkaConsumerConfig {
 
         factory.setCommonErrorHandler(kafkaErrorHandler);
 
+        factory.setConcurrency(4);
+
         return factory;
     }
 }
