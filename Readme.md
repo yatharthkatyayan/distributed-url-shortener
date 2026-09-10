@@ -1,86 +1,155 @@
 # Distributed URL Shortener
 
-A production-oriented distributed URL shortener built with **Java, Spring Boot, PostgreSQL, Redis, Kafka, Docker, and Nginx**.
+A production-oriented distributed URL shortener built with **Java, Spring Boot, PostgreSQL, Redis, Apache Kafka, Docker, and Nginx**.
 
-The project focuses on distributed-system fundamentals such as horizontal scaling, distributed caching, asynchronous event processing, idempotency, rate limiting, failure handling, and load balancing.
+The project demonstrates how a URL-shortening service can be designed to support **horizontal scaling, distributed caching, asynchronous event processing, idempotent analytics, distributed rate limiting, failure handling, load balancing, and performance testing**.
+
+The system is designed as a local, Docker-based distributed environment that can be extended toward a production deployment.
 
 ---
 
 ## Features
 
-- Short URL generation using a **Snowflake-style distributed ID generator + Base62 encoding**
-- PostgreSQL as the source of truth
-- Redis caching for high-frequency redirect lookups
-- Asynchronous click analytics using Apache Kafka
-- Kafka consumer groups with **4-way parallel click processing**
-- Idempotent click-event processing using unique event IDs
-- Kafka retry handling and Dead Letter Topic (DLT)
-- Distributed rate limiting using Redis + atomic Lua scripting
-- Horizontal scaling with multiple Spring Boot replicas
-- Nginx load balancing
-- Docker Compose-based local deployment
-- Application readiness and dependency health checks
-- Spring Boot Actuator metrics and health endpoints
-- k6 load testing
-- Failure testing for application replicas and Kafka
+* Snowflake-style distributed ID generation
+* Base62 encoding for compact short URLs
+* PostgreSQL as the source of truth for URL mappings
+* Redis caching for low-latency URL redirects
+* Asynchronous click analytics using Apache Kafka
+* Separate Kafka topics for URL creation and click events
+* Kafka consumer groups with 4-way parallel click-event processing
+* At-least-once event processing with idempotency protection
+* Unique event IDs to prevent duplicate analytics
+* Retry handling and Dead Letter Topic (DLT) support
+* Distributed rate limiting using Redis and Lua scripts
+* Multiple Spring Boot application replicas
+* Nginx load balancing
+* Docker Compose based local distributed deployment
+* PostgreSQL, Redis, Kafka, application replicas, and Nginx managed through Docker
+* Startup readiness and dependency health checks
+* Spring Boot Actuator health and metrics
+* k6 load testing
+* Failure testing for application replicas, Redis, and Kafka
+* Cache fallback from Redis to PostgreSQL
 
 ---
 
-## Architecture
+# Architecture
+
+The system consists of multiple stateless Spring Boot application instances running behind an Nginx load balancer.
+
+Persistent state is shared through PostgreSQL, while Redis provides distributed caching and rate limiting. Kafka handles asynchronous URL and click events.
 
 ```mermaid
-flowchart TB
+flowchart LR
 
-    Client[Client]
+    Client["Client"]
 
-    LB[Nginx Load Balancer]
+    Nginx["Nginx Load Balancer"]
 
-    App1[Spring Boot Replica 1]
-    App2[Spring Boot Replica 2]
+    App1["Spring Boot Instance 1"]
+    App2["Spring Boot Instance 2"]
 
-    Redis[(Redis)]
-    Postgres[(PostgreSQL)]
+    Redis[("Redis")]
+    PostgreSQL[("PostgreSQL")]
 
-    Kafka[(Kafka)]
+    Kafka["Apache Kafka"]
 
-    URLConsumer[URL Event Consumer]
-    ClickConsumer[Click Analytics Consumers x4]
+    URLTopic["url-events"]
+    ClickTopic["url-click-events"]
 
-    Analytics[(Click Analytics DB)]
+    URLConsumer["URL Event Consumer"]
+    
+    C1["Click Consumer 1"]
+    C2["Click Consumer 2"]
+    C3["Click Consumer 3"]
+    C4["Click Consumer 4"]
 
-    Client --> LB
+    Client --> Nginx
 
-    LB --> App1
-    LB --> App2
+    Nginx --> App1
+    Nginx --> App2
 
     App1 --> Redis
     App2 --> Redis
 
-    App1 --> Postgres
-    App2 --> Postgres
+    App1 --> PostgreSQL
+    App2 --> PostgreSQL
 
     App1 --> Kafka
     App2 --> Kafka
 
-    Kafka --> URLConsumer
-    Kafka --> ClickConsumer
+    Kafka --> URLTopic
+    Kafka --> ClickTopic
 
-    ClickConsumer --> Analytics
+    URLTopic --> URLConsumer
+
+    ClickTopic --> C1
+    ClickTopic --> C2
+    ClickTopic --> C3
+    ClickTopic --> C4
+
+    C1 --> PostgreSQL
+    C2 --> PostgreSQL
+    C3 --> PostgreSQL
+    C4 --> PostgreSQL
 ```
 
-## API Documentation
+### High-Level Architecture
 
-### Create Short URL
+```text
+                         ┌─────────────────────┐
+                         │       Client        │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │   Nginx Load        │
+                         │     Balancer        │
+                         └──────────┬──────────┘
+                                    │
+                       ┌────────────┴────────────┐
+                       │                         │
+                       ▼                         ▼
+              ┌─────────────────┐       ┌─────────────────┐
+              │ Spring Boot     │       │ Spring Boot     │
+              │ Instance 1      │       │ Instance 2      │
+              └───────┬─────────┘       └────────┬────────┘
+                      │                            │
+             ┌────────┼────────┐          ┌────────┼────────┐
+             │        │        │          │        │        │
+             ▼        ▼        ▼          ▼        ▼        ▼
+           Redis  PostgreSQL Kafka      Redis  PostgreSQL Kafka
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+                    ▼                   ▼
+              url-events       url-click-events
+                                      │
+                              4 Kafka partitions
+                                      │
+                         ┌────────────┼────────────┐
+                         ▼            ▼            ▼
+                    Consumers 1-4 operating
+                    within the same group
+                                      │
+                                      ▼
+                                 PostgreSQL
+```
 
-Creates a shortened URL for the supplied original URL.
+---
 
-**Endpoint**
+# API Documentation
+
+## 1. Create Short URL
+
+### Request
 
 ```http
 POST /api/v1/urls
+Content-Type: application/json
 ```
 
-**Request**
+### Request Body
 
 ```json
 {
@@ -88,157 +157,36 @@ POST /api/v1/urls
 }
 ```
 
-**Response — `201 Created`**
+### Response
+
+```http
+HTTP/1.1 201 Created
+```
 
 ```json
 {
-  "shortCode": "6J5skeLVzW",
-  "shortUrl": "http://localhost:8080/6J5skeLVzW"
+  "shortCode": "6EKMIJ0vxS",
+  "shortUrl": "http://localhost:8081/6EKMIJ0vxS"
 }
 ```
 
-The short code is generated using a Snowflake-style distributed ID generator and Base62 encoding.
+The service generates a distributed ID, converts it to Base62, stores the URL mapping in PostgreSQL, populates Redis, and publishes a URL creation event asynchronously.
 
 ---
 
-### Redirect
-
-Redirects the client to the original URL associated with a short code.
-
-**Endpoint**
+## 2. Redirect to Original URL
 
 ```http
 GET /{shortCode}
 ```
 
-**Example**
+Example:
 
 ```http
-GET /6J5skeLVzW
+GET /6EKMIJ0vxS
 ```
 
-**Response — `302 Found`**
-
-```http
-HTTP/1.1 302 Found
-Location: https://example.com
-```
-
-The redirect path first checks Redis for the short code. On a cache miss, the application queries PostgreSQL and caches the result in Redis.
-
----
-
-### Click Analytics
-
-Returns the number of recorded clicks for a short URL.
-
-**Endpoint**
-
-```http
-GET /{shortCode}/analytics
-```
-
-**Example**
-
-```http
-GET /6J5skeLVzW/analytics
-```
-
-**Response**
-
-```json
-{
-  "shortCode": "6J5skeLVzW",
-  "clicks": 125
-}
-```
-
-Click events are published asynchronously to Kafka and persisted by the click analytics consumer.
-
-Analytics are therefore eventually consistent with redirect traffic.
-
----
-
-### Instance Information
-
-Returns the identifier of the Spring Boot application instance handling the request.
-
-**Endpoint**
-
-```http
-GET /instance
-```
-
-**Example Response**
-
-```text
-<instance-id>
-```
-
-This endpoint is used to verify Nginx load balancing across multiple Spring Boot replicas.
-
----
-
-### Health
-
-Returns the health status of the application and its configured dependencies.
-
-**Endpoint**
-
-```http
-GET /actuator/health
-```
-
-Spring Boot Actuator is used to expose health information and application metrics.
-
----
-
-### Metrics
-
-Exposes application and infrastructure metrics through Spring Boot Actuator.
-
-**Endpoint**
-
-```http
-GET /actuator/metrics
-```
-
-Available metrics include HTTP requests, JVM statistics, database connection pool metrics, Kafka producer/consumer metrics, Redis/Lettuce metrics, and system/process metrics.
-
-
-## Core Design Decisions
-
-### Distributed ID Generation
-
-The system uses a Snowflake-style ID generator to create unique, time-ordered IDs without relying on a centralized database sequence.
-
-The generated numeric ID is encoded using Base62 to produce a compact, URL-safe short code.
-
-This approach provides:
-
-* Unique IDs across application instances
-* Time-ordered identifiers
-* No database round-trip for ID generation
-* Compact Base62 short codes
-* Compatibility with horizontal scaling
-
----
-
-### PostgreSQL
-
-PostgreSQL is used as the primary persistent data store for URL mappings and click analytics.
-
-Flyway manages database schema changes through versioned migrations, while Hibernate/JPA is configured with schema validation rather than automatic schema creation.
-
-The `short_code` column has a unique constraint and index to support efficient redirect lookups.
-
----
-
-### Redis Caching
-
-Redis is used to cache URL redirect data and reduce repeated PostgreSQL queries on frequently accessed short URLs.
-
-The redirect flow is:
+The redirect endpoint first checks Redis.
 
 ```text
 Request
@@ -246,76 +194,269 @@ Request
    ▼
 Redis Cache
    │
-   ├── Hit ──► Return URL
+   ├── Hit ──────> 302 Redirect
    │
    └── Miss
-         │
-         ▼
-    PostgreSQL
-         │
-         ▼
-    Store in Redis
-         │
-         ▼
-      Return URL
+        │
+        ▼
+   PostgreSQL
+        │
+        ▼
+   Populate Redis
+        │
+        ▼
+   302 Redirect
 ```
-
-Cached entries use a 10-minute TTL.
-
-This reduces database load for repeated redirects while keeping PostgreSQL as the source of truth.
 
 ---
 
-### Kafka Analytics
+## 3. Click Analytics
 
-Kafka is used to decouple the redirect path from click analytics processing.
+```http
+GET /api/v1/urls/{shortCode}/analytics
+```
 
-A successful redirect does not wait for analytics persistence to complete. Instead, the application publishes a `UrlClickedEvent` asynchronously to the `url-click-events` topic.
+Example:
 
-The analytics consumer processes these events and persists them to PostgreSQL.
+```http
+GET /api/v1/urls/6EKMIJ0vxS/analytics
+```
+
+Example response:
+
+```json
+{
+  "shortCode": "6EKMIJ0vxS",
+  "clicks": 42
+}
+```
+
+Click analytics are processed asynchronously through Kafka and therefore are **eventually consistent** with redirect traffic.
+
+---
+
+## 4. Instance Information
+
+```http
+GET /instance
+```
+
+This endpoint can be used to identify which Spring Boot replica handled a request.
+
+It is useful when demonstrating Nginx load balancing and horizontal scaling.
+
+---
+
+## 5. Health Check
+
+```http
+GET /actuator/health
+```
+
+Spring Boot Actuator exposes application health and dependency information.
+
+---
+
+## 6. Metrics
+
+```http
+GET /actuator/metrics
+```
+
+Available metrics can include HTTP, JVM, database connection pool, Kafka, Redis/Lettuce, executor, Tomcat, system, and process metrics depending on the enabled configuration.
+
+---
+
+# Core Design Decisions
+
+## 1. Snowflake-Style Distributed ID Generation
+
+The service uses a Snowflake-style ID generator instead of relying on a database-generated identifier for every URL.
+
+The generated ID is converted to Base62 to produce a compact short code.
 
 ```text
-Client
-  │
-  ▼
-Redirect API
-  │
-  ├──────────────► 302 Redirect
-  │
-  └──► Kafka
-         │
-         ▼
-   Click Consumer
-         │
-         ▼
-   PostgreSQL
+Distributed ID
+      │
+      ▼
+  Base62 Encoder
+      │
+      ▼
+ Short Code
 ```
 
-This makes analytics eventually consistent while keeping the latency-sensitive redirect path independent of analytics processing.
+### Benefits
 
-Kafka publishing for click analytics is intentionally best-effort. If Kafka is unavailable, the redirect can still succeed, but the corresponding analytics event may be lost.
+* Distributed ID generation
+* No database round trip required to generate the identifier
+* Time-ordered identifiers
+* Suitable for horizontally scaled application instances
+* Compact representation after Base62 encoding
 
----
-
-### Kafka Partitioning
-
-The `url-click-events` topic uses four partitions.
-
-Events are published using the URL's `shortCode` as the Kafka message key. Kafka therefore routes events for the same short code to the same partition while allowing events for different short codes to be processed concurrently.
-
-The click analytics consumer uses four concurrent consumer threads, allowing the four partitions to be processed in parallel.
-
-This provides a balance between per-key ordering and parallel event processing.
+The implementation also uses a worker ID mechanism so multiple application instances can generate IDs without relying on a centralized ID-generation service.
 
 ---
 
-### Idempotency
+## 2. PostgreSQL as the Source of Truth
 
-Kafka provides at-least-once delivery semantics, which means an event may be delivered more than once.
+PostgreSQL stores the persistent URL mappings and click analytics.
 
-Click events therefore contain a unique `eventId`.
+The URL table contains fields including:
 
-The analytics table enforces a unique constraint on this identifier. The consumer also performs an existence check before persisting an event.
+* ID
+* Short code
+* Original URL
+* Creation timestamp
+* Expiration timestamp
+
+The `short_code` column is unique and indexed for efficient lookup.
+
+Database schema changes are managed using **Flyway**.
+
+Hibernate validates the existing schema instead of generating it automatically:
+
+```properties
+spring.jpa.hibernate.ddl-auto=validate
+```
+
+This keeps schema ownership with Flyway migrations.
+
+---
+
+## 3. Redis Caching
+
+Redis is used as a distributed cache for URL redirect data.
+
+The redirect path follows a cache-first strategy:
+
+```text
+GET /{shortCode}
+       │
+       ▼
+     Redis
+       │
+   ┌───┴────┐
+   │        │
+  Hit     Miss
+   │        │
+   ▼        ▼
+302      PostgreSQL
+            │
+            ▼
+        Redis Cache
+            │
+            ▼
+           302
+```
+
+Cached URL data uses a TTL of approximately **10 minutes**.
+
+Redis is also used for distributed rate limiting.
+
+If Redis becomes unavailable during a redirect lookup, the service can fall back to PostgreSQL.
+
+---
+
+# Kafka Event Processing
+
+Kafka is used to decouple asynchronous processing from the synchronous URL and redirect paths.
+
+The project uses two separate topics.
+
+## URL Creation Events
+
+```text
+url-events
+```
+
+This topic receives `UrlCreatedEvent` messages when new short URLs are created.
+
+```text
+Application
+     │
+     ▼
+UrlCreatedEvent
+     │
+     ▼
+url-events
+     │
+     ▼
+UrlCreatedEventConsumer
+```
+
+The URL creation event contains information such as:
+
+* Short code
+* Original URL
+* Creation timestamp
+
+---
+
+## Click Events
+
+```text
+url-click-events
+```
+
+Redirect requests generate `UrlClickedEvent` messages for asynchronous analytics processing.
+
+```text
+Redirect Request
+      │
+      ▼
+UrlClickedEvent
+      │
+      ▼
+url-click-events
+      │
+      ▼
+Kafka Consumer Group
+      │
+      ├── Consumer 1
+      ├── Consumer 2
+      ├── Consumer 3
+      └── Consumer 4
+      │
+      ▼
+PostgreSQL Analytics
+```
+
+The click-event topic is configured with **4 partitions**, allowing up to four consumers in the same consumer group to process partitions concurrently.
+
+---
+
+# Kafka Partitioning Strategy
+
+The click-event producer uses the URL's `shortCode` as the Kafka message key.
+
+```text
+shortCode
+    │
+    ▼
+Kafka Partitioning
+    │
+    ├── Partition 0
+    ├── Partition 1
+    ├── Partition 2
+    └── Partition 3
+```
+
+Using the short code as the key ensures that events for the same URL are routed consistently to the same partition.
+
+This provides a useful balance between:
+
+* Parallel processing across different URLs
+* Ordering of events for the same URL
+
+The consumer group processes the four partitions concurrently.
+
+---
+
+# Idempotent Click Processing
+
+Kafka consumers operate with **at-least-once delivery semantics**, which means a message can potentially be processed more than once.
+
+To prevent duplicate analytics:
 
 ```text
 Kafka Event
@@ -323,286 +464,433 @@ Kafka Event
      ▼
 Check eventId
      │
- ┌───┴────┐
- │        │
-Exists   New
- │        │
- ▼        ▼
-Ignore   Persist
+     ├── Already processed ──> Ignore
+     │
+     └── New event
+             │
+             ▼
+       Process analytics
+             │
+             ▼
+       Store event identity
 ```
 
-The database uniqueness constraint provides the final correctness guarantee against duplicate records.
+Each click event contains a unique event ID.
+
+The database also enforces uniqueness so that the final persistence layer provides an additional guarantee against duplicate processing.
+
+This makes the analytics processing idempotent even when Kafka redelivers an event.
 
 ---
 
-### Retry + Dead Letter Topic
+# Retry and Dead Letter Handling
 
-Kafka consumers use Spring Kafka's `DefaultErrorHandler` with a fixed retry policy.
+Kafka consumer failures are handled using Spring Kafka error handling.
 
-For the URL event consumer, a failed message is retried twice with a 2-second interval.
+The URL event consumer is configured with retry handling before failed records are sent to a Dead Letter Topic.
 
-If processing continues to fail, the message is published to:
+Example flow:
 
 ```text
-url-events.DLT
+Kafka Message
+     │
+     ▼
+ Consumer
+     │
+     ├── Success ─────────────> Processed
+     │
+     └── Failure
+          │
+          ▼
+       Retry
+          │
+          ├── Success ────────> Processed
+          │
+          └── Failure
+                │
+                ▼
+             Retry
+                │
+                ▼
+        url-events.DLT
 ```
 
-This prevents a permanently failing message from repeatedly blocking normal event processing and provides a separate destination for failed events.
+The current URL event configuration retries failed processing twice with a two-second interval before routing the record to the DLT.
 
 ---
 
-### Distributed Rate Limiting
+# Distributed Rate Limiting
 
-The application implements a distributed fixed-window rate limiter using Redis and an atomic Lua script.
+The service implements distributed rate limiting using **Redis and Lua scripting**.
 
-The default limit is:
+The current limit is:
 
 ```text
 10 requests / minute / client IP
 ```
 
-Redis provides shared state across application replicas, meaning the limit is enforced consistently even when requests are distributed across multiple Spring Boot instances.
+The rate limit is stored in Redis, meaning all Spring Boot replicas share the same rate-limit state.
 
-The Lua script performs the counter check and update atomically, preventing race conditions between concurrent requests.
+```text
+                 Nginx
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+      Instance 1        Instance 2
+          │                 │
+          └────────┬────────┘
+                   ▼
+                 Redis
+                   │
+                   ▼
+             Rate Limit State
+```
 
----
+A Lua script performs the rate-limit operation atomically.
 
-### Horizontal Scaling
+When the limit is exceeded:
 
-The application is designed to run as multiple stateless Spring Boot instances behind Nginx.
+```http
+HTTP/1.1 429 Too Many Requests
+```
 
-Shared state is maintained outside individual application instances:
-
-* PostgreSQL stores persistent data
-* Redis stores shared cache and rate-limit state
-* Kafka provides asynchronous event processing
-
-Nginx distributes incoming requests across the application replicas.
-
-This allows application instances to be added or removed without requiring application-local state migration.
-
-
-
-## Reliability & Failure Testing
-
-The system was tested under dependency and application-instance failures to verify that the distributed architecture continues serving traffic where the affected component is not required for the request path.
-
-### Application Replica Failure
-
-Two Spring Boot application replicas were deployed behind Nginx.
-
-One replica was intentionally stopped while the system was receiving traffic.
-
-**Result:**
-
-* Nginx continued routing requests to the remaining application instance.
-* Redirect requests continued to return `302 Found`.
-* No HTTP errors were observed during the failure test.
-
-This validates horizontal scaling and application-instance failure tolerance.
+This prevents users from bypassing the limit simply by being routed to another application instance.
 
 ---
 
-### Kafka Failure
+# Horizontal Scaling
 
-Kafka was intentionally stopped while the application remained available.
+The application is designed to run as multiple stateless Spring Boot instances.
 
-The redirect path was designed so that click analytics publishing is asynchronous and best-effort.
+```text
+                    Nginx
+                      │
+             ┌────────┴────────┐
+             ▼                 ▼
+        App Instance 1    App Instance 2
+             │                 │
+             └────────┬────────┘
+                      │
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
+       Redis      PostgreSQL     Kafka
+```
 
-**Result:**
+Application-local state is minimized so that requests can be handled by any available replica.
 
-* Redirect requests continued to return `302 Found`.
-* The application did not fail the redirect request because Kafka was unavailable.
-* Click analytics events could not be published while Kafka was down.
-
-This demonstrates that the latency-sensitive redirect path is decoupled from the analytics pipeline.
-
----
-
-### Redis Failure
-
-Redis failure was tested to verify that the application can continue operating without the cache layer.
-
-The system falls back to PostgreSQL for URL retrieval when cached data is unavailable.
-
-This preserves PostgreSQL as the source of truth while Redis acts as a performance optimization rather than a required persistence layer.
+Shared state is maintained by infrastructure components such as PostgreSQL, Redis, and Kafka.
 
 ---
 
-### Startup Dependency Readiness
+# API Flow / Request Lifecycle
 
-Docker Compose health checks were added for:
+## Create Short URL
+
+```text
+POST /api/v1/urls
+        │
+        ▼
+UrlController
+        │
+        ▼
+UrlService
+        │
+        ├── Generate distributed ID
+        │
+        ├── Base62 encode
+        │
+        ├── Persist URL mapping
+        │
+        ├── Populate Redis
+        │
+        └── Publish UrlCreatedEvent
+                    │
+                    ▼
+               url-events
+                    │
+                    ▼
+          UrlCreatedEventConsumer
+```
+
+The URL creation request does not depend on the analytics pipeline completing successfully.
+
+---
+
+## Redirect
+
+```text
+GET /{shortCode}
+        │
+        ▼
+RedirectController
+        │
+        ▼
+Redis Cache
+        │
+        ├── Hit ──────> 302 Redirect
+        │
+        └── Miss
+             │
+             ▼
+        PostgreSQL
+             │
+             ▼
+        Redis Cache
+             │
+             ▼
+        302 Redirect
+```
+
+A click event can then be published asynchronously for analytics processing.
+
+---
+
+## Click Analytics
+
+```text
+Redirect
+   │
+   ▼
+UrlClickedEvent
+   │
+   ▼
+url-click-events
+   │
+   ▼
+4 Kafka Partitions
+   │
+   ▼
+Consumer Group
+   │
+   ▼
+Idempotency Check
+   │
+   ▼
+PostgreSQL
+   │
+   ▼
+Updated Click Analytics
+```
+
+Analytics processing is intentionally separated from the synchronous redirect path.
+
+---
+
+# Reliability & Failure Testing
+
+The system includes failure scenarios designed to demonstrate how the distributed components behave when individual dependencies become unavailable.
+
+## Application Replica Failure
+
+Two Spring Boot replicas run behind Nginx.
+
+A replica can be stopped while the other continues serving traffic.
+
+Expected behavior:
+
+```text
+Nginx
+  │
+  ├── App 1 ── X
+  │
+  └── App 2 ──> Handles requests
+```
+
+The remaining replica continues serving redirect traffic.
+
+---
+
+## Redis Failure
+
+When Redis is unavailable during URL lookup, the application can fall back to PostgreSQL.
+
+```text
+Request
+   │
+   ▼
+Redis ── X
+   │
+   ▼
+PostgreSQL
+   │
+   ▼
+302 Redirect
+```
+
+This prevents a cache failure from becoming a complete redirect outage.
+
+---
+
+## Kafka Failure
+
+Kafka is used for asynchronous processing rather than being required for the core redirect lookup.
+
+If Kafka becomes unavailable:
+
+```text
+Redirect Request
+      │
+      ▼
+Redis / PostgreSQL
+      │
+      ▼
+302 Redirect
+```
+
+The redirect path can continue to return the URL.
+
+However, click-event publishing cannot complete while Kafka is unavailable, so analytics events may be lost when publishing is configured as best effort.
+
+This is an intentional trade-off between redirect availability and asynchronous analytics durability.
+
+---
+
+## Startup Readiness
+
+Docker Compose health checks are used for infrastructure dependencies.
+
+The application depends on services such as:
 
 * PostgreSQL
 * Redis
 * Kafka
 
-The application waits for these dependencies to become healthy before startup, reducing failures caused by attempting to connect to dependencies that are still initializing.
+Nginx starts after the application services are available.
 
-Nginx is started after the application service is available.
+This reduces startup race conditions when bringing the entire environment up with Docker Compose.
 
 ---
 
-### Rate Limiting Under Load
+## Rate-Limit Failure Scenario
 
-The distributed rate limiter was tested through the Nginx load balancer.
+The rate limiter is shared through Redis across application replicas.
 
-With the default configuration of **10 requests per minute per client IP**, requests beyond the configured limit returned:
+Example:
 
 ```text
-HTTP 429 Too Many Requests
+Client
+  │
+  ├── Request 1 ──> App 1
+  ├── Request 2 ──> App 2
+  ├── Request 3 ──> App 1
+  └── ...
+             │
+             ▼
+           Redis
+             │
+       Shared Counter
 ```
 
-Because rate-limit state is stored in Redis, the limit is shared across application replicas rather than maintained independently by each instance.
+Once the configured threshold is exceeded, the API returns:
+
+```http
+429 Too Many Requests
+```
 
 ---
 
-### Failure Testing Summary
+# Reliability Test Summary
 
-| Scenario                    | Expected Behavior                                 | Result |
-| --------------------------- | ------------------------------------------------- | ------ |
-| Application replica failure | Traffic continues through remaining replica       | Passed |
-| Kafka unavailable           | Redirect remains available; analytics may be lost | Passed |
-| Redis unavailable           | URL retrieval can fall back to PostgreSQL         | Passed |
-| Dependency startup delay    | Application waits for healthy dependencies        | Passed |
-| Rate limit exceeded         | Requests return `429`                             | Passed |
+| Scenario                    | Expected Behavior                                                    |
+| --------------------------- | -------------------------------------------------------------------- |
+| Application replica failure | Remaining replica continues serving traffic                          |
+| Redis failure               | Redirect falls back to PostgreSQL                                    |
+| Kafka failure               | Redirect path remains available; asynchronous publishing is affected |
+| Duplicate Kafka event       | Idempotency prevents duplicate analytics                             |
+| Consumer processing failure | Retry followed by DLT                                                |
+| Rate-limit overflow         | HTTP 429                                                             |
+| Delayed dependency startup  | Health/readiness checks prevent premature startup                    |
 
+These tests are intended to demonstrate system behavior under controlled local failure scenarios rather than represent production SLA guarantees.
 
+---
 
+# Performance Testing
 
-## Observability
+The redirect path was benchmarked locally using **k6**.
 
-The application uses Spring Boot Actuator to expose health information and runtime metrics for monitoring application and infrastructure behavior.
+## Test Environment
 
-### Health Monitoring
+* Docker Compose environment
+* Two Spring Boot application replicas
+* Nginx load balancing
+* PostgreSQL running in Docker
+* Redis running in Docker
+* Kafka running in Docker
+* Existing short URL
+* Redis caching enabled
+* 100 virtual users
+* 30-second test duration
+* Redirect following disabled
 
-The following endpoint exposes application health information:
+The benchmark focused on the redirect endpoint rather than end-to-end URL creation and analytics processing.
+
+---
+
+## Results
+
+| Run   | Requests/sec | Avg Latency | P95 Latency | Errors |
+| ----- | -----------: | ----------: | ----------: | -----: |
+| Run 1 |         1166 |    85.40 ms |   167.22 ms |     0% |
+| Run 2 |         1081 |    91.82 ms |   131.99 ms |     0% |
+| Run 3 |         1282 |    77.72 ms |   122.39 ms |     0% |
+
+### Average
+
+Approximately:
+
+* **1176 requests/sec**
+* **85 ms average latency**
+* **141 ms P95 latency**
+* **0% request errors**
+* **100% successful HTTP 302 responses**
+
+These results were obtained in a local Docker environment and should **not** be interpreted as production capacity.
+
+Actual throughput in production would depend on hardware, network characteristics, database configuration, Kafka configuration, deployment topology, traffic patterns, and other infrastructure factors.
+
+---
+
+# Observability
+
+Spring Boot Actuator is used for application health and metrics.
+
+## Health
 
 ```http
 GET /actuator/health
 ```
 
-Health checks cover the application's configured dependencies, including:
-
-* PostgreSQL
-* Redis
-* Kafka
-
-This allows the application and deployment environment to detect dependency availability.
+Health information can be used to determine whether the application and configured dependencies are available.
 
 ---
 
-### Application Metrics
-
-The following endpoint exposes individual application metrics:
+## Metrics
 
 ```http
 GET /actuator/metrics
 ```
 
-Metrics include:
+The application exposes metrics across areas such as:
 
-* HTTP server request counts and latency
-* JVM memory and runtime statistics
-* HikariCP database connection pool metrics
-* JDBC connection metrics
-* Kafka producer and consumer metrics
-* Redis/Lettuce metrics
-* Executor metrics
-* System and process metrics
-* Tomcat session metrics
+* HTTP requests
+* JVM
+* CPU
+* Memory
+* HikariCP
+* JDBC
+* Kafka
+* Redis / Lettuce
+* Executor pools
+* Tomcat
+* Process
+* System
 
-These metrics provide visibility into request performance, resource utilization, database connections, messaging activity, and runtime behavior.
+These metrics provide visibility into application behavior during development, failure testing, and load testing.
 
 ---
 
-### Performance Monitoring
-
-HTTP request metrics can be used to inspect request counts and latency distributions, while infrastructure metrics help identify potential bottlenecks such as:
-
-* Database connection pool exhaustion
-* Increasing request latency
-* JVM resource pressure
-* Kafka consumer/producer activity
-* Redis command activity
-
-For load testing, k6 is used externally to generate controlled traffic and measure throughput, latency percentiles, and error rates.
-
-
-
-
-
-## Performance Testing
-
-The redirect endpoint was benchmarked locally using **k6** against the Dockerized deployment with two Spring Boot application replicas behind Nginx.
-
-The benchmark used:
-
-* **100 virtual users**
-* **30-second duration**
-* `maxRedirects: 0`
-* HTTP `GET` requests against an existing short URL
-* Two application replicas
-* Redis caching enabled
-* PostgreSQL and Kafka running through Docker Compose
-
-### Benchmark Results
-
-Three independent runs were performed under the same configuration.
-
-| Run |  Throughput | Avg Latency | P95 Latency | HTTP Errors |
-| --- | ----------: | ----------: | ----------: | ----------: |
-| 1   | 1,166 req/s |     85.4 ms |   167.22 ms |          0% |
-| 2   | 1,081 req/s |    91.82 ms |   131.99 ms |          0% |
-| 3   | 1,282 req/s |    77.72 ms |   122.39 ms |          0% |
-
-Across the three runs, the system averaged approximately **1,176 requests/sec**, with approximately **85 ms average latency** and **141 ms average P95 latency**.
-
-All three runs completed with **0% HTTP errors** and 100% of status checks returning `302 Found`.
-
-### Load Distribution
-
-The benchmark was executed through Nginx rather than directly against an individual application instance.
-
-This verifies the complete request path:
-
-```text
-k6
- │
- ▼
-Nginx
- │
- ├──► Spring Boot Replica 1
- │
- └──► Spring Boot Replica 2
-          │
-          ├──► Redis
-          └──► PostgreSQL
-```
-
-The application instances remain stateless, allowing requests to be distributed across replicas while sharing persistent and cached state through the external infrastructure.
-
-### Benchmark Scope
-
-These results represent a **local Docker-based benchmark**, not production capacity.
-
-Actual production throughput would depend on factors such as:
-
-* CPU and memory resources
-* Network latency
-* Database configuration
-* Redis capacity
-* Kafka configuration
-* Number of application replicas
-* Load-balancer configuration
-* Cloud infrastructure
-
-The benchmark is primarily intended to validate the system's behavior under concurrent load and provide reproducible performance measurements for the current implementation.
-
-
-## Project Structure
-
-The project follows a layered Spring Boot architecture, separating HTTP handling, business logic, persistence, messaging, caching, rate limiting, and infrastructure configuration.
+# Project Structure
 
 ```text
 distributed-url-shortener/
@@ -610,70 +898,71 @@ distributed-url-shortener/
 ├── src/
 │   ├── main/
 │   │   ├── java/
-│   │   │   └── com/yatharth/distributedurlshortener/
+│   │   │   └── com/
+│   │   │       └── yatharth/
+│   │   │           └── distributedurlshortener/
 │   │   │
-│   │   │       ├── config/
-│   │   │       │   ├── KafkaConfig
-│   │   │       │   ├── KafkaConsumerConfig
-│   │   │       │   ├── KafkaErrorHandlingConfig
-│   │   │       │   ├── RateLimitInterceptor
-│   │   │       │   ├── RedisConfig
-│   │   │       │   └── WebConfig
-│   │   │       │
-│   │   │       ├── consumer/
-│   │   │       │   ├── UrlClickedEventConsumer
-│   │   │       │   └── UrlCreatedEventConsumer
-│   │   │       │
-│   │   │       ├── controller/
-│   │   │       │   ├── AnalyticsController
-│   │   │       │   ├── HomeController
-│   │   │       │   ├── InstanceController
-│   │   │       │   ├── RedirectController
-│   │   │       │   └── UrlController
-│   │   │       │
-│   │   │       ├── dto/
-│   │   │       │   ├── CreateShortUrlRequest
-│   │   │       │   ├── CreateShortUrlResponse
-│   │   │       │   ├── UrlAnalyticsResponse
-│   │   │       │   └── UrlRedirectData
-│   │   │       │
-│   │   │       ├── entity/
-│   │   │       │   ├── Url
-│   │   │       │   ├── UrlAnalytics
-│   │   │       │   └── UrlClickAnalytics
-│   │   │       │
-│   │   │       ├── event/
-│   │   │       │   ├── UrlClickedEvent
-│   │   │       │   └── UrlCreatedEvent
-│   │   │       │
-│   │   │       ├── exception/
-│   │   │       │   ├── ErrorResponse
-│   │   │       │   ├── GlobalExceptionHandler
-│   │   │       │   └── UrlNotFoundException
-│   │   │       │
-│   │   │       ├── producer/
-│   │   │       │   ├── UrlClickEventProducer
-│   │   │       │   └── UrlEventProducer
-│   │   │       │
-│   │   │       ├── repository/
-│   │   │       │   ├── UrlAnalyticsRepository
-│   │   │       │   ├── UrlClickAnalyticsRepository
-│   │   │       │   └── UrlRepository
-│   │   │       │
-│   │   │       ├── service/
-│   │   │       │   ├── AnalyticsService
-│   │   │       │   ├── RateLimitService
-│   │   │       │   └── UrlService
-│   │   │       │
-│   │   │       ├── util/
-│   │   │       │   ├── Base62Encoder
-│   │   │       │   ├── SnowflakeIdGenerator
-│   │   │       │   └── WorkerIdManager
-│   │   │       │
-│   │   │       └── DistributedUrlShortenerApplication
+│   │   │               ├── config/
+│   │   │               │   ├── KafkaConfig
+│   │   │               │   ├── KafkaConsumerConfig
+│   │   │               │   ├── KafkaErrorHandlingConfig
+│   │   │               │   ├── RateLimitInterceptor
+│   │   │               │   ├── RedisConfig
+│   │   │               │   └── WebConfig
+│   │   │               │
+│   │   │               ├── consumer/
+│   │   │               │   ├── UrlClickedEventConsumer
+│   │   │               │   └── UrlCreatedEventConsumer
+│   │   │               │
+│   │   │               ├── controller/
+│   │   │               │   ├── AnalyticsController
+│   │   │               │   ├── HomeController
+│   │   │               │   ├── InstanceController
+│   │   │               │   ├── RedirectController
+│   │   │               │   └── UrlController
+│   │   │               │
+│   │   │               ├── dto/
+│   │   │               │   ├── CreateShortUrlRequest
+│   │   │               │   ├── CreateShortUrlResponse
+│   │   │               │   ├── UrlAnalyticsResponse
+│   │   │               │   └── UrlRedirectData
+│   │   │               │
+│   │   │               ├── entity/
+│   │   │               │   ├── Url
+│   │   │               │   ├── UrlAnalytics
+│   │   │               │   └── UrlClickAnalytics
+│   │   │               │
+│   │   │               ├── event/
+│   │   │               │   ├── UrlClickedEvent
+│   │   │               │   └── UrlCreatedEvent
+│   │   │               │
+│   │   │               ├── exception/
+│   │   │               │   ├── ErrorResponse
+│   │   │               │   ├── GlobalExceptionHandler
+│   │   │               │   └── UrlNotFoundException
+│   │   │               │
+│   │   │               ├── producer/
+│   │   │               │   ├── UrlClickEventProducer
+│   │   │               │   └── UrlEventProducer
+│   │   │               │
+│   │   │               ├── repository/
+│   │   │               │   ├── UrlAnalyticsRepository
+│   │   │               │   ├── UrlClickAnalyticsRepository
+│   │   │               │   └── UrlRepository
+│   │   │               │
+│   │   │               ├── service/
+│   │   │               │   ├── AnalyticsService
+│   │   │               │   ├── RateLimitService
+│   │   │               │   └── UrlService
+│   │   │               │
+│   │   │               └── util/
+│   │   │                   ├── Base62Encoder
+│   │   │                   ├── SnowflakeIdGenerator
+│   │   │                   └── WorkerIdManager
 │   │   │
 │   │   └── resources/
-│   │       ├── db.migration/
+│   │       ├── db/
+│   │       │   └── migration/
 │   │       ├── static/
 │   │       └── templates/
 │   │
@@ -689,275 +978,261 @@ distributed-url-shortener/
 └── README.md
 ```
 
-### Package Responsibilities
+---
 
-| Package      | Responsibility                                        |
-| ------------ | ----------------------------------------------------- |
-| `config`     | Kafka, Redis, rate-limiting, and web configuration    |
-| `controller` | REST endpoints and HTTP request handling              |
-| `dto`        | API request and response objects                      |
-| `service`    | Core URL, analytics, and rate-limiting business logic |
-| `repository` | Spring Data JPA persistence operations                |
-| `entity`     | PostgreSQL persistence models                         |
-| `event`      | Kafka event definitions                               |
-| `producer`   | Publishing URL and click events to Kafka              |
-| `consumer`   | Asynchronous Kafka event processing                   |
-| `exception`  | Application exceptions and global error handling      |
-| `util`       | Distributed ID generation, worker ID management, and Base62 encoding                |
+# Package Responsibilities
 
-### Infrastructure Files
+| Package      | Responsibility                                     |
+| ------------ | -------------------------------------------------- |
+| `config`     | Kafka, Redis, rate limiting, and web configuration |
+| `controller` | REST API and redirect endpoints                    |
+| `dto`        | API request and response models                    |
+| `entity`     | JPA persistence models                             |
+| `event`      | Kafka event definitions                            |
+| `producer`   | Kafka event publishing                             |
+| `consumer`   | Kafka event consumption                            |
+| `repository` | Database access                                    |
+| `service`    | Application and business logic                     |
+| `exception`  | Exception handling and API error responses         |
+| `util`       | ID generation, worker IDs, and Base62 encoding     |
 
-| File                 | Purpose                                                        |
-| -------------------- | -------------------------------------------------------------- |
-| `Dockerfile`         | Builds the Spring Boot application image                       |
-| `docker-compose.yml` | Runs PostgreSQL, Redis, Kafka, application replicas, and Nginx |
-| `nginx/nginx.conf`   | Load-balances requests across application replicas             |
-| `load-test.js`       | k6 load-testing scenario                                       |
-| `pom.xml`            | Maven dependencies and build configuration                     |
-| `db.migration/`      | Version-controlled Flyway database migrations                  |
+---
 
-The package structure keeps infrastructure concerns separated from the core application logic while allowing components such as Kafka, Redis, and rate limiting to evolve independently.
+# Running Locally
 
+The complete infrastructure is containerized.
 
+You **do not need to install PostgreSQL, Redis, Kafka, or Nginx locally**.
 
-## Running Locally
+## Prerequisites
 
-### Prerequisites
+Install only:
 
-Make sure the following are installed and running:
-
-* Java 17+
+* Java 17 or newer
 * Docker
 * Docker Compose
-* Maven
-* PostgreSQL
-* Redis
-* Apache Kafka
+* Git
 
-### 1. Clone the Repository
+The project uses the Maven Wrapper, so a separate Maven installation is not required.
+
+---
+
+## 1. Clone the Repository
 
 ```bash
-git clone https://github.com/<your-username>/distributed-url-shortener.git
+git clone <repository-url>
 cd distributed-url-shortener
 ```
 
-### 2. Start Infrastructure
+---
 
-Start PostgreSQL and Redis using Docker:
+## 2. Start the Infrastructure
+
+Start the Docker Compose environment:
 
 ```bash
 docker compose up -d
 ```
 
-Verify the containers are running:
+The Compose environment provides the required infrastructure and application services.
 
-```bash
-docker ps
-```
+Typical service ports include:
 
-The application expects the following services:
+| Service     |                       Port |
+| ----------- | -------------------------: |
+| PostgreSQL  |                     `5432` |
+| Redis       |                     `6379` |
+| Kafka       |                     `9092` |
+| Application |                     `8081` |
+| Nginx       | configured through Compose |
 
-| Service    | Default Port |
-| ---------- | -----------: |
-| PostgreSQL |       `5432` |
-| Redis      |       `6379` |
-| Kafka      |       `9092` |
+The exact application/Nginx ports are defined by `docker-compose.yml`.
 
-### 3. Start Kafka
+---
 
-Make sure Kafka is running and accessible at:
+## 3. Start the Application
 
-```text
-localhost:9092
-```
+### Windows
 
-Create the application topic if it does not already exist:
-
-```bash
-kafka-topics --create \
-  --topic url-events \
-  --bootstrap-server localhost:9092 \
-  --partitions 3 \
-  --replication-factor 1
-```
-
-Verify the topic:
-
-```bash
-kafka-topics --list \
-  --bootstrap-server localhost:9092
-```
-
-You should see:
-
-```text
-url-events
-```
-
-### 4. Run Database Migrations
-
-Flyway migrations run automatically when the Spring Boot application starts.
-
-The application uses:
-
-```text
-spring.jpa.hibernate.ddl-auto=validate
-```
-
-so the database schema is managed through Flyway rather than Hibernate.
-
-### 5. Start the Application
-
-Using Maven Wrapper:
-
-**Windows**
-
-```bash
+```powershell
 .\mvnw.cmd spring-boot:run
 ```
 
-**Linux/macOS**
+### Linux / macOS
 
 ```bash
 ./mvnw spring-boot:run
 ```
 
-The application will start on the configured Spring Boot port.
+Flyway migrations run automatically when the application starts.
 
-### 6. Verify the Application
+---
 
-Once the application is running, create a short URL using the API documented above.
+# Kafka Topics
 
-Example:
+The project uses two Kafka topics.
 
-```bash
-curl -X POST http://localhost:8081/api/v1/urls \
-  -H "Content-Type: application/json" \
-  -d "{\"originalUrl\":\"https://www.example.com\"}"
-```
-
-A successful response should contain the generated short code.
-
-The generated URL can then be accessed through:
-
-```text
-http://localhost:8081/{shortCode}
-```
-
-### 7. Verify Kafka Events
-
-When a URL is created, the application publishes a `UrlCreatedEvent` to:
+## URL Events
 
 ```text
 url-events
 ```
 
-The Kafka consumer listens using:
+Used for URL creation events.
+
+Example event:
 
 ```text
-url-analytics-group
+UrlCreatedEvent
 ```
 
-The consumer should log the received event in the application console.
+---
 
-### 8. Stop the Application
-
-Stop the Spring Boot application with:
+## Click Events
 
 ```text
-Ctrl + C
+url-click-events
 ```
 
-Stop the Docker infrastructure with:
+Used for asynchronous click analytics.
+
+The click-event topic uses **4 partitions** to support parallel consumer processing.
+
+```text
+url-click-events
+├── Partition 0
+├── Partition 1
+├── Partition 2
+└── Partition 3
+```
+
+The consumer group processes these partitions concurrently.
+
+---
+
+## Verify Kafka Topics
+
+If topic inspection is required, use the Kafka container defined by Docker Compose.
+
+For example:
 
 ```bash
-docker compose down
+docker compose exec kafka kafka-topics \
+  --bootstrap-server localhost:9092 \
+  --list
 ```
 
-To remove the PostgreSQL volume as well:
+The exact Kafka container/service name depends on the `docker-compose.yml` configuration.
+
+Expected topics include:
+
+```text
+url-events
+url-click-events
+```
+
+---
+
+# Example API Usage
+
+## Create a Short URL
 
 ```bash
-docker compose down -v
+curl -X POST http://localhost:8081/api/v1/urls \
+  -H "Content-Type: application/json" \
+  -d "{\"originalUrl\":\"https://example.com\"}"
 ```
 
-> **Warning:** Removing the volume deletes the local PostgreSQL data.
+Example response:
 
+```json
+{
+  "shortCode": "6EKMIJ0vxS",
+  "shortUrl": "http://localhost:8081/6EKMIJ0vxS"
+}
+```
 
+---
 
-## Configuration
+## Redirect
 
-The application configuration is maintained through Spring Boot configuration files and environment variables.
+Open:
 
-### Database
+```text
+http://localhost:8081/6EKMIJ0vxS
+```
 
-The application uses PostgreSQL for persistent URL metadata.
+The service returns:
 
-Default local configuration:
+```http
+302 Found
+Location: https://example.com
+```
+
+---
+
+## Get Analytics
+
+```bash
+curl http://localhost:8081/api/v1/urls/6EKMIJ0vxS/analytics
+```
+
+Example:
+
+```json
+{
+  "shortCode": "6EKMIJ0vxS",
+  "clicks": 42
+}
+```
+
+---
+
+# Configuration
+
+Configuration is externalized through Spring configuration and environment variables.
+
+## PostgreSQL
+
+Example configuration:
 
 ```properties
 spring.datasource.url=jdbc:postgresql://localhost:5432/urlshortener
 spring.datasource.username=postgres
-spring.datasource.password=<your-password>
-```
-
-Hibernate validates the schema created by Flyway:
-
-```properties
+spring.datasource.password=${DATABASE_PASSWORD}
 spring.jpa.hibernate.ddl-auto=validate
 ```
 
-### Flyway
-
-Flyway manages database schema migrations.
-
-Migration scripts are stored under:
+Database schema changes are managed through:
 
 ```text
 src/main/resources/db/migration/
 ```
 
-Migrations are applied automatically when the application starts.
+---
 
-### Redis
-
-Redis is used for caching URL data and reducing repeated database lookups.
-
-Default local configuration:
+## Redis
 
 ```properties
 spring.data.redis.host=localhost
 spring.data.redis.port=6379
 ```
 
-### Kafka
+---
 
-Kafka is used for asynchronous event publishing and consumption.
-
-The application connects to the local Kafka broker:
+## Kafka
 
 ```properties
 spring.kafka.bootstrap-servers=localhost:9092
 ```
 
-The URL creation event is published to:
+The application uses the configured Kafka topics and consumer groups for asynchronous event processing.
 
-```text
-url-events
-```
+---
 
-The consumer uses the following consumer group:
+# Environment Variables
 
-```text
-url-analytics-group
-```
-
-Kafka producer configuration enables reliable message delivery and idempotent publishing.
-
-### Environment Variables
-
-Production deployments should provide environment-specific values through environment variables rather than committing credentials to source control.
-
-Typical configurable values include:
+The application supports environment-based configuration such as:
 
 ```text
 DATABASE_URL
@@ -968,365 +1243,243 @@ REDIS_PORT
 KAFKA_BOOTSTRAP_SERVERS
 ```
 
-> **Note:** The values above are examples of configuration parameters. Do not commit passwords, API keys, credentials, or other secrets to the repository.
+This allows the same application configuration to be adapted between local Docker development and a future production deployment.
 
-### Local vs Production Configuration
+---
 
-The project is designed so that infrastructure endpoints can be changed without modifying application code.
-
-For local development:
+# Local Deployment Architecture
 
 ```text
-Application
-    │
-    ├── PostgreSQL → localhost:5432
-    ├── Redis      → localhost:6379
-    └── Kafka      → localhost:9092
+┌─────────────────────────────────────────────────────┐
+│                  Docker Compose                     │
+│                                                     │
+│  ┌──────────┐                                       │
+│  │  Nginx   │                                       │
+│  └────┬─────┘                                       │
+│       │                                             │
+│   ┌───┴───────────────┐                             │
+│   │                   │                             │
+│   ▼                   ▼                             │
+│ App Instance 1   App Instance 2                     │
+│   │                   │                             │
+│   └───────┬───────────┘                             │
+│           │                                         │
+│     ┌─────┼──────────────┐                          │
+│     ▼     ▼              ▼                          │
+│  Redis PostgreSQL      Kafka                        │
+│                           │                         │
+│                  ┌────────┴────────┐                │
+│                  ▼                 ▼                │
+│             url-events     url-click-events         │
+│                                      │              │
+│                              4 partitions           │
+│                                      │              │
+│                              Click Consumers        │
+│                                      │              │
+│                                      ▼              │
+│                                 PostgreSQL          │
+└─────────────────────────────────────────────────────┘
 ```
 
-In a production environment, these endpoints can be replaced with managed or distributed infrastructure while keeping the application architecture unchanged.
+---
 
+# Testing Strategy
 
-## API Flow / Request Lifecycle
+The project is designed to test both individual components and distributed-system behavior.
 
-The URL shortener follows a cache-first read path and an event-driven write path.
+## Unit Tests
 
-### Create Short URL
+Potential unit-test areas include:
 
-When a client creates a short URL:
-
-```text
-Client
-  │
-  │ POST /api/v1/urls
-  ▼
-URL Controller
-  │
-  ▼
-URL Service
-  │
-  ├── Generate unique ID
-  │
-  ├── Encode ID using Base62
-  │
-  ├── Store URL metadata
-  │       │
-  │       ▼
-  │    PostgreSQL
-  │
-  ├── Cache URL
-  │       │
-  │       ▼
-  │     Redis
-  │
-  └── Publish UrlCreatedEvent
-          │
-          ▼
-        Kafka
-          │
-          ▼
-   URL Event Consumer
-```
-
-The synchronous request handles URL creation and persistence, while Kafka is used to process the resulting event asynchronously.
-
-### Redirect Short URL
-
-When a user accesses a shortened URL:
-
-```text
-Client
-  │
-  │ GET /{shortCode}
-  ▼
-URL Controller
-  │
-  ▼
-Redis Cache
-  │
-  ├── Cache Hit ──────────────► Redirect
-  │
-  └── Cache Miss
-          │
-          ▼
-      PostgreSQL
-          │
-          ▼
-      Redis Cache
-          │
-          ▼
-        Redirect
-```
-
-The cache-first approach avoids a database query for frequently accessed URLs.
-
-### URL Creation Flow
-
-1. The client sends the original URL to the REST API.
-2. The service generates a unique identifier.
-3. The identifier is converted into a compact Base62 short code.
-4. URL metadata is persisted in PostgreSQL.
-5. The URL is added to Redis for fast subsequent lookups.
-6. A `UrlCreatedEvent` is published to Kafka.
-7. The Kafka consumer processes the event asynchronously.
-
-### Redirect Flow
-
-1. The client requests a short code.
-2. The application checks Redis first.
-3. If the URL exists in the cache, the application immediately redirects the client.
-4. If the URL is not cached, PostgreSQL is queried.
-5. The retrieved URL is placed into Redis.
-6. The client is redirected to the original URL.
-
-### Event-Driven Processing
-
-URL creation events are decoupled from the main request-response flow through Kafka.
-
-```text
-URL Service
-    │
-    │ UrlCreatedEvent
-    ▼
-Kafka Topic: url-events
-    │
-    ▼
-Consumer Group:
-url-analytics-group
-    │
-    ▼
-Event Consumer
-```
-
-This separation allows additional consumers to be introduced later without changing the core URL creation flow.
-
-Potential future consumers could independently handle:
-
-* Click analytics
-* Usage statistics
-* Event aggregation
-* Monitoring
-* Audit processing
-
-### Failure Isolation
-
-The architecture separates synchronous URL operations from asynchronous event processing.
-
-A failure in an event consumer does not require the URL creation API itself to perform the downstream processing synchronously. Kafka provides durable event storage and consumer-group-based processing, allowing failed events to be processed again according to the configured consumer behavior.
-
-### High-Level Architecture
-
-```text
-                         ┌───────────────┐
-                         │    Client     │
-                         └───────┬───────┘
-                                 │
-                                 ▼
-                         ┌───────────────┐
-                         │  REST API     │
-                         └───────┬───────┘
-                                 │
-                                 ▼
-                         ┌───────────────┐
-                         │  URL Service  │
-                         └───┬───────┬───┘
-                             │       │
-                  ┌──────────┘       └──────────┐
-                  ▼                             ▼
-          ┌───────────────┐              ┌───────────────┐
-          │  PostgreSQL   │              │     Redis     │
-          └───────────────┘              └───────────────┘
-                             │
-                             ▼
-                      ┌───────────────┐
-                      │     Kafka     │
-                      │  url-events   │
-                      └───────┬───────┘
-                              │
-                              ▼
-                      ┌───────────────┐
-                      │ Kafka Consumer│
-                      └───────────────┘
-```
-
-
-## Future Improvements
-
-The current implementation focuses on demonstrating the core distributed-system architecture. The following improvements can be added as the system evolves.
-
-### Infrastructure
-
-* Deploy application replicas to AWS ECS or Kubernetes
-* Use managed PostgreSQL and Redis
-* Run Kafka as a multi-broker cluster
-* Add automated infrastructure provisioning
-* Introduce centralized configuration management
-
-### Scalability
-
-* Increase the number of application replicas based on traffic
-* Partition Kafka topics based on workload requirements
-* Introduce database read replicas for redirect-heavy workloads
-* Add Redis cluster support for larger cache workloads
-* Introduce CDN support for globally distributed traffic
-
-### Analytics
-
-* Expand click analytics with timestamps, referrers, user agents, and geographic information
-* Add time-based analytics aggregation
-* Introduce separate analytical storage for high-volume event data
-* Add dashboards for traffic and system metrics
-
-### Reliability
-
-* Add circuit breakers around external dependencies
-* Improve Kafka retry and DLT recovery workflows
-* Add automated recovery testing
-* Introduce distributed tracing
-* Add centralized logging and alerting
-
-### Security
-
-* Add authentication and authorization for URL management APIs
-* Add API-key or token-based access
-* Improve request validation
-* Add abuse detection and configurable rate limits
-* Add HTTPS/TLS termination at the load balancer
-
-### Testing
-
-* Expand unit and integration test coverage
-* Add Testcontainers-based infrastructure tests
-* Automate load testing in CI
-* Add repeatable failure-injection tests
-* Test Kafka consumer recovery and duplicate-event scenarios
-
-
-
-
-## Testing Strategy
-
-The project uses multiple levels of testing to validate both application behavior and distributed-system components.
-
-### Unit Testing
-
-Unit tests focus on individual components in isolation, including:
-
-* URL generation and validation
+* URL validation
+* Short-code generation
 * Base62 encoding
 * Snowflake-style ID generation
+* Worker ID handling
 * URL service logic
-* Rate-limiting logic
+* Rate limiting
 * Analytics processing
 * Exception handling
 
-### Integration Testing
+---
 
-Integration tests verify interactions between application components and external infrastructure.
+## Integration Tests
 
-Key integration scenarios include:
+Integration testing can cover:
 
 * PostgreSQL persistence
-* Redis caching and cache misses
-* Kafka event publishing
-* Kafka event consumption
-* Duplicate event handling
-* Flyway database migrations
-* Application health checks
+* Flyway migrations
+* Redis caching
+* Kafka publishing
+* Kafka consumption
+* Duplicate event processing
+* Analytics persistence
+* Health checks
+* Dependency availability
 
-### Distributed-System Testing
+---
 
-The project also validates behavior that cannot be adequately tested through unit tests alone.
+## Distributed-System Scenarios
 
-Scenarios include:
+The project also considers:
 
-| Scenario                      | Purpose                            |
-| ----------------------------- | ---------------------------------- |
-| Multiple application replicas | Validate horizontal scaling        |
-| Nginx load balancing          | Verify traffic distribution        |
-| Redis failure                 | Verify database fallback           |
-| Kafka failure                 | Verify redirect-path isolation     |
-| Duplicate Kafka event         | Verify idempotent processing       |
-| Consumer failure              | Verify retry and DLT behavior      |
-| Rate-limit concurrency        | Verify atomic distributed limiting |
-| Dependency startup delay      | Verify readiness handling          |
+* Multiple Spring Boot replicas
+* Nginx load balancing
+* Application replica failure
+* Redis failure
+* Kafka failure
+* Duplicate Kafka events
+* Consumer processing failure
+* Retry and DLT handling
+* Concurrent rate-limit requests
+* Delayed dependency startup
 
-### Load Testing
+---
 
-The redirect endpoint is load tested using **k6**.
+# Load Testing
 
-The load test measures:
+k6 is used for HTTP performance testing.
 
-* Requests per second
-* Average latency
-* P95 latency
-* HTTP error rate
-* Successful redirect responses
-
-The test is executed through Nginx so that the complete load-balanced request path is exercised.
+The load-testing script can be found at:
 
 ```text
-k6
- │
- ▼
-Nginx
- │
- ├──► Application Replica 1
- │
- └──► Application Replica 2
+load-test.js
 ```
 
-### Failure Testing
+The current benchmark uses:
 
-Failure scenarios are intentionally introduced into the local distributed environment.
+```text
+100 virtual users
+30 seconds
+```
 
-Examples include:
+The test targets an existing short URL and disables redirect following so that the performance of the redirect endpoint itself can be measured.
 
-* Stopping one application replica
-* Stopping Redis
-* Stopping Kafka
-* Delaying infrastructure startup
-* Generating requests beyond the rate limit
-* Producing events that fail consumer processing
+Example:
 
-The objective is to verify that failures are isolated where possible and that the system degrades according to the intended architecture.
+```text
+Client
+  │
+  ▼
+Nginx
+  │
+  ├── App 1
+  └── App 2
+       │
+       ▼
+     Redis
+       │
+       ▼
+   302 Response
+```
 
-### Test Philosophy
+---
 
-The testing strategy focuses not only on whether individual methods work correctly, but also on whether the system behaves correctly when components operate concurrently or become unavailable.
+# Failure Testing Philosophy
 
-This is particularly important for validating:
+The goal of failure testing is not simply to verify that individual services work.
 
-* Eventual consistency
-* At-least-once event delivery
-* Idempotent processing
-* Shared distributed state
-* Horizontal scaling
-* Dependency failure handling
-* Load-balancer behavior
+It is to understand what happens when one component becomes unavailable.
 
+Examples:
 
+```text
+Redis fails
+    │
+    ▼
+Can PostgreSQL keep redirects working?
+```
 
-## Technologies Used
+```text
+Kafka fails
+    │
+    ▼
+Can the synchronous redirect path remain available?
+```
 
-| Category                  | Technology                             |
-| ------------------------- | -------------------------------------- |
-| Language                  | Java                                   |
-| Framework                 | Spring Boot                            |
-| Persistence               | PostgreSQL, Spring Data JPA, Hibernate |
-| Database Migrations       | Flyway                                 |
-| Caching                   | Redis                                  |
-| Messaging                 | Apache Kafka, Spring Kafka             |
-| Distributed ID Generation | Snowflake-style ID Generator           |
-| Encoding                  | Base62                                 |
-| Rate Limiting             | Redis + Lua                            |
-| Load Balancing            | Nginx                                  |
-| Containerization          | Docker, Docker Compose                 |
-| Monitoring                | Spring Boot Actuator                   |
-| Load Testing              | k6                                     |
-| Build Tool                | Maven                                  |
+```text
+Application instance fails
+    │
+    ▼
+Can Nginx route traffic to another instance?
+```
 
-### Backend
+```text
+Kafka event is duplicated
+    │
+    ▼
+Can analytics remain correct?
+```
+
+This helps demonstrate the difference between **component availability**, **data durability**, and **eventual consistency**.
+
+---
+
+# Future Improvements
+
+The current implementation provides a local distributed-system environment. Possible future extensions include:
+
+## Infrastructure
+
+* AWS ECS deployment
+* Kubernetes deployment
+* Infrastructure as Code
+* Managed PostgreSQL
+* Managed Redis
+* Multi-broker Kafka cluster
+* Centralized configuration
+* CI/CD pipeline
+
+## Scalability
+
+* PostgreSQL read replicas
+* Redis Cluster
+* Kafka partition scaling
+* CDN integration
+* Traffic-aware load balancing
+
+## Analytics
+
+* More detailed click metadata
+* Geographic analytics
+* Device/browser analytics
+* Time-series analytics
+* Dedicated analytical storage
+* Analytics dashboards
+
+## Reliability
+
+* Circuit breakers
+* More comprehensive DLT recovery
+* Distributed tracing
+* Centralized logging
+* Alerting
+* Automated recovery testing
+* Kafka recovery testing
+
+## Security
+
+* Authentication and authorization
+* API keys or access tokens
+* HTTPS
+* Abuse detection
+* Stronger URL validation
+* Request validation and security controls
+
+## Testing
+
+* Broader automated test coverage
+* Testcontainers
+* CI-based load testing
+* Automated failure injection
+* Kafka recovery tests
+* Concurrency testing
+
+---
+
+# Technologies Used
+
+## Backend
 
 * Java
 * Spring Boot
@@ -1335,40 +1488,108 @@ This is particularly important for validating:
 * Hibernate
 * Spring Kafka
 
-### Infrastructure
+## Data & Messaging
 
 * PostgreSQL
 * Redis
 * Apache Kafka
+* Flyway
+
+## Distributed Systems
+
+* Snowflake-style ID generation
+* Base62 encoding
+* Distributed caching
+* Redis Lua scripting
+* Distributed rate limiting
+* Kafka partitions
+* Kafka consumer groups
+* Idempotent event processing
+* Retry and Dead Letter Topics
+* Horizontal application scaling
+* Nginx load balancing
+
+## Infrastructure
+
 * Docker
 * Docker Compose
 * Nginx
 
-### Distributed-System Components
+## Observability & Testing
 
-* Snowflake-style distributed ID generation
-* Base62 encoding
-* Redis distributed caching
-* Redis-based distributed rate limiting
-* Kafka partitioning and consumer groups
-* Idempotent event processing
-* Retry and Dead Letter Topics
-* Horizontal application scaling
-* Load balancing
-* Health and readiness checks
-
-### Testing & Observability
-
-* k6 load testing
 * Spring Boot Actuator
-* Application health checks
+* k6
+* Health checks
 * JVM and infrastructure metrics
-* Failure-injection testing
+* Failure testing
 
+---
 
+# Design Principles
 
-## License
+The project focuses on several distributed-system principles:
+
+### Stateless Application Instances
+
+Application replicas do not rely on local state for URL persistence or rate limiting.
+
+### Shared Infrastructure
+
+PostgreSQL, Redis, and Kafka provide shared state and coordination across application instances.
+
+### Cache-Aside Reads
+
+Redis is used as a cache while PostgreSQL remains the source of truth.
+
+### Asynchronous Processing
+
+Click analytics are decoupled from the redirect path through Kafka.
+
+### At-Least-Once Processing
+
+Kafka consumers are designed around at-least-once delivery with idempotent processing.
+
+### Failure Isolation
+
+Non-critical asynchronous processing is separated from the synchronous redirect path.
+
+### Horizontal Scaling
+
+Multiple application replicas can operate behind Nginx.
+
+### Measured Performance
+
+Performance claims are based on local k6 measurements rather than theoretical throughput estimates.
+
+---
+
+# Project Status
+
+The project currently provides a locally runnable distributed URL-shortening environment with:
+
+* URL creation
+* Short-code generation
+* PostgreSQL persistence
+* Redis caching
+* Kafka-based asynchronous processing
+* Click analytics
+* Idempotent event processing
+* Retry and DLT handling
+* Distributed rate limiting
+* Multiple application replicas
+* Nginx load balancing
+* Docker Compose deployment
+* Health checks
+* Actuator metrics
+* k6 performance testing
+* Controlled failure testing
+
+The architecture is intentionally designed so that the local implementation can be extended toward cloud deployment and larger-scale distributed infrastructure.
+
+---
+
+# License
 
 This project is intended for educational, portfolio, and system-design demonstration purposes.
 
-See the repository for the applicable license and usage terms.
+If a specific open-source license is added to the repository, this section should be updated to reference that license directly.
